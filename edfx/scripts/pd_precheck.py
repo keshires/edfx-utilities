@@ -370,15 +370,17 @@ def classify_public(
 class PdMappingResolver:
     """Resolves each private/custom entity to an EntityStatus via pds then mapping.
 
-    ``pds_post_batch(entity_ids) -> list[dict]`` and ``mapping_lookup(external_ids)
-    -> set[str]`` (external_ids that mapping found) are injected for offline testing;
-    the scripts supply SSO-authenticated implementations.
+    ``pds_post_batch(entity_ids) -> list[dict]`` and
+    ``mapping_lookup(external_ids, tenant_id) -> set[str]`` (external_ids that mapping
+    found) are injected for offline testing; the scripts supply SSO-authenticated
+    implementations. ``tenant_id`` is passed so callers can set ``x-tenant-id`` on the
+    mapping request — required for custom entities whose external_ids are tenant-scoped.
     """
 
     def __init__(
         self,
         pds_post_batch: "Callable[[list[str]], list[dict]]",
-        mapping_lookup: "Callable[[list[str]], set[str]]",
+        mapping_lookup: "Callable[[list[str], str | None], set[str]]",
         batch_size: int = 200,
     ) -> None:
         self._pds = pds_post_batch
@@ -389,6 +391,7 @@ class PdMappingResolver:
         id_map: dict[str, str] = {}
         ordered: list[str] = []
         no_data: set[str] = set()
+        ext_to_tenant: dict[str, str] = {r.external_id: r.tenant_id for r in rows}
         for r in rows:
             eid = pds_entity_id(r, entity_type)
             if eid is None:
@@ -408,10 +411,16 @@ class PdMappingResolver:
                 else:
                     pds_res[ext] = pr
 
+        # Group no_data by tenant and call mapping once per tenant so the
+        # x-tenant-id header is set correctly (custom external_ids are tenant-scoped).
         mapped: set[str] = set()
-        nd = list(no_data)
-        for i in range(0, len(nd), self._bs):
-            mapped |= self._mapping(nd[i : i + self._bs])
+        by_tenant: dict[str | None, list[str]] = {}
+        for ext in no_data:
+            t = ext_to_tenant.get(ext)
+            by_tenant.setdefault(t, []).append(ext)
+        for tenant_id, tenant_ids in by_tenant.items():
+            for i in range(0, len(tenant_ids), self._bs):
+                mapped |= self._mapping(tenant_ids[i : i + self._bs], tenant_id)
 
         out: dict[str, EntityStatus] = {}
         for r in rows:
