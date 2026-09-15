@@ -5,18 +5,21 @@ description: Use when refreshing or reconciling stale non-public (private/custom
 
 # Stale Entity Refresh
 
-Tools live in `Day2Day_Utillites/`. Run everything from that folder with its venv
-(`.\.venv\Scripts\python`), with `.env` populated. Canonical args/env for every command are in
-`Day2Day_Utillites/utilities.yaml` (browse via the dashboard, bottom). Full monthly procedure:
-`Day2Day_Utillites/Docs/monthly-stale-refresh-runbook.md`.
+Tools live in `edfx/scripts/`. Run everything from `edfx/` with its venv
+(`.\.venv\Scripts\python`), with `.env` populated at `edfx/.env`. Canonical args/env for every
+command are in `edfx/utilities.yaml` (browse via the dashboard). Full monthly procedure:
+`edfx/runbooks/monthly-stale-refresh-runbook.md`.
 
 ## Three corrections that matter (get these wrong and the run is invalid)
 
 - **Measure staleness by `--stale-date-column pd_last_known_date`, NOT the default `updated_date`.**
   A refresh bumps `updated_date` even when the PD doesn't advance, so `updated_date` makes the queue
   look caught up when it isn't. `pd_last_known_date` is the true signal.
-- **Exclude the deprecated giant** by setting `STALE_REFRESH_EXCLUDED_TENANTS=001aJ00000Cwqc2QAB`
-  in `.env`. This also *includes* `0014000000NXtS8` (the script's built-in default excludes it).
+- **Two-phase tenant exclusion — clients first, then Moodys tenant.**
+  - **Phase 1** (initial/overnight): set `STALE_REFRESH_EXCLUDED_TENANTS=001aJ00000Cwqc2QAB,0014000000NXtS8`
+    to prioritise client entities first.
+  - **Phase 2** (follow-up): set `STALE_REFRESH_EXCLUDED_TENANTS=001aJ00000Cwqc2QAB` to pick up
+    Moodys tenant `0014000000NXtS8`. The deprecated giant `001aJ00000Cwqc2QAB` is **always excluded**.
 - **Batch posting is the default — do NOT use `--one-per-request` unless explicitly asked.** The
   "Multiple Overlay Process Ids found" failure on large mixed-overlay batches was fixed by
   [edfx-tessera-service PR #2564 / EDFX-28971](https://github.com/moodysanalytics/edfx-tessera-service/pull/2564)
@@ -57,13 +60,18 @@ auto-targets `2026-08-01`; override with `--date-filter YYYY-MM-01`).
    Resolves `custom_id` via JOIN with `public.entity` to pick the right `payload_type`. Entities not
    found in `public.entity` are logged as `not_found` and skipped. Add `--correlation-id <id>` to
    scope to a specific batch. Read-only without `--resubmit`.
-4. **Re-validate after the queue settles** (repeat step 1); re-run steps 3 + 3b on any residual until it plateaus.
+4. **Re-validate & iterate using precheck → extract → repost** (allow ≥24 hrs for the async queue):
+   - Run precheck: `python validate_pd_precheck.py --entity-type custom`
+   - Extract refreshable IDs (action == 'POST') from the output CSV into a `.txt` file
+   - Repost only those: `python refresh_stale_non_public_entities.py --entity-type custom --stale-date-column pd_last_known_date --workers 3 --allow-ids-file <path>`
+   - Skip `mapped_no_pd`, `orphaned`, `source_stale`, `current_pd` — reposting them won't advance the PD.
+   - Run step 3b after each repost. Repeat until precheck shows zero `action == 'POST'`.
 5. **Spot-verify (optional):** `python test_single_entity_refresh.py --entity-type custom --count 10`
    — submits a few individually and polls until `pd_last_known_date` advances.
 
 ## PD eligibility validation report (`validate_pd_precheck.py`) — team command
 
-**Command** (run from `Day2Day_Utillites`, read-only, never posts):
+**Command** (run from `edfx/`, read-only, never posts):
 ```powershell
 .\.venv\Scripts\python validate_pd_precheck.py --entity-type custom    # or: private | public
 #   --date-filter YYYY-MM-01   (default: 1st of the current month)
@@ -80,6 +88,10 @@ actionable data-quality view (orphans to clean up; custom financials not complet
 - **public** — DB-only, report-only (`public_fresh` = current-month PD + Active/null status, else `public_stale`).
 
 **Buckets:** `current_pd`/`refreshable` → POST (worth refreshing) · `no_pd`/`source_stale`/`mapped_no_pd` → SKIP (futile) · `orphaned` → SKIP + delete-candidate.
+
+**Custom entity mapping fix (2026-09-09):** `/entity/v1/mapping` requires `x-tenant-id` header
+for custom entities — without it, tenant-scoped external_ids return empty and entities are
+falsely classified as orphaned. Fixed in `validate_pd_precheck.py`; always use the updated script.
 
 **Outputs** (`output/validate_pd_precheck/` + `.summary.json` in `logs/validate_pd_precheck/`):
 - `pd_precheck_<type>_<ts>.csv` — every stale entity + category/action/reason (+ `financials_process_status` for custom).
@@ -108,7 +120,7 @@ Outputs: `output/<script>/…` (CSVs, snapshots) and `logs/<script>/…` (run lo
 
 ## Dashboard
 ```powershell
-cd Day2Day_Utillites
+cd edfx
 .\.venv\Scripts\python -m uvicorn dashboard.serve:app --host 127.0.0.1 --port 8021
 # http://127.0.0.1:8021/app/ — cards, copy-ready commands, recent run history.
 ```
