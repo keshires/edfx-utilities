@@ -79,7 +79,7 @@ def test_resolver_pds_found_mapping_orphan():
                 out.append({"entityId": i, "message": "No data found"})
         return out
 
-    def mapping_lookup(external_ids):
+    def mapping_lookup(external_ids, tenant_id=None):
         return {e for e in external_ids if e == "NODATA_MAPPED"}  # only this one maps
 
     resolver = p.PdMappingResolver(pds_post, mapping_lookup, batch_size=10)

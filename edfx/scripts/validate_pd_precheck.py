@@ -174,13 +174,18 @@ def _http(logger):
         except Exception:
             return []
 
-    def mapping_lookup(external_ids):
+    def mapping_lookup(external_ids, tenant_id=None):
         # Batched: an id is "found" if it appears in the mapping response body.
+        # x-tenant-id is required for custom entities — their external_ids are
+        # tenant-scoped and the mapping endpoint returns no results without it.
+        headers = hdr()
+        if tenant_id:
+            headers["x-tenant-id"] = tenant_id
         queries = []
         for e in external_ids:
             queries.append({"entityId": e})
             queries.append({"customEntityIdentifier": e})
-        r = session.post(f"{base}/entity/v1/mapping", headers=hdr(), json={"queries": queries},
+        r = session.post(f"{base}/entity/v1/mapping", headers=headers, json={"queries": queries},
                          verify=False, timeout=180)
         body = r.text or ""
         return {e for e in external_ids if e in body}
