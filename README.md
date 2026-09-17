@@ -1,11 +1,13 @@
-# MyUtilities
+# edfx-utilities
 
 Shared repository for support and day-to-day operational utilities across EDFX, Credit Edge, and RiskCalc.
+
+New here? See [GETTING_STARTED.md](GETTING_STARTED.md) for setup and operations by app.
 
 ## Repo Structure
 
 ```
-MyUtilities/
+edfx-utilities/
 │
 ├── edfx/               ← EDFX scripts, runbooks, utilities
 ├── credit-edge/        ← Credit Edge scripts, runbooks
